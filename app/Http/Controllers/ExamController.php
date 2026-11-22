@@ -41,6 +41,8 @@ class ExamController extends Controller
             'submitted' => $exam->submitted_at !== null,
             'score' => $exam->score,
             'total' => (int) $exam->total,
+            'mode' => $exam->mode ?? 'exam',
+            'serverNow' => $this->nowMs(),
             'questions' => $rows->map(function ($q) use ($withAnswers) {
                 $item = [
                     'id' => $q->id,
@@ -61,20 +63,27 @@ class ExamController extends Controller
     // body: { subjects: ["Mathematics"], perSubject: 10, minutes: 15 }
     public function store(Request $request): JsonResponse
     {
+        if ((int) $request->input('retakeFrom') > 0) {
+            return $this->retake($request, (int) $request->input('retakeFrom'));
+        }
+
         $subjects = $request->input('subjects', []);
         if (!is_array($subjects) || count($subjects) < 1 || count($subjects) > 4) {
             return response()->json(['error' => 'Choose 1 to 4 subjects'], 400);
         }
         $per = max(1, min(60, (int) $request->input('perSubject', 10)));
-        $minutes = max(1, min(120, (int) $request->input('minutes', 15)));
+        $counts = (array) $request->input('counts', []);   // optional: { "Use of English": 60, "Physics": 40 }
+        $mode = $request->input('mode') === 'study' ? 'study' : 'exam';
+        $minutes = $mode === 'study' ? 360 : max(1, min(120, (int) $request->input('minutes', 15)));
 
         $picked = [];
         foreach ($subjects as $name) {
+            $n = isset($counts[$name]) ? max(1, min(60, (int) $counts[$name])) : $per;
             $ids = DB::table('questions as q')
                 ->join('subjects as s', 's.id', '=', 'q.subject_id')
                 ->where('s.name', (string) $name)
                 ->inRandomOrder()
-                ->limit($per)
+                ->limit($n)
                 ->pluck('q.id')
                 ->all();
             if (!$ids) {
@@ -83,17 +92,65 @@ class ExamController extends Controller
             array_push($picked, ...$ids);
         }
 
-        $examId = DB::transaction(function () use ($request, $subjects, $minutes, $picked) {
+        $examId = DB::transaction(function () use ($request, $subjects, $minutes, $picked, $mode) {
             $id = DB::table('exams')->insertGetId([
                 'user_id' => $request->user()->id,
                 'subjects' => json_encode(array_values($subjects)),
                 'started_at' => $this->nowMs(),
                 'duration_sec' => $minutes * 60,
                 'total' => count($picked),
+                'mode' => $mode,
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
             foreach ($picked as $i => $qid) {
+                DB::table('exam_questions')->insert(['exam_id' => $id, 'question_id' => $qid, 'position' => $i]);
+            }
+            return $id;
+        });
+
+        return response()->json($this->view(DB::table('exams')->find($examId), false), 201);
+    }
+
+    // Builds a new exam from the questions the student missed or skipped in a finished exam.
+    private function retake(Request $request, int $fromId): JsonResponse
+    {
+        $src = $this->find($request, $fromId);
+        if (!$src || $src->submitted_at === null) {
+            return response()->json(['error' => 'Finish that exam first'], 400);
+        }
+
+        $rows = DB::table('exam_questions as eq')
+            ->join('questions as q', 'q.id', '=', 'eq.question_id')
+            ->join('subjects as s', 's.id', '=', 'q.subject_id')
+            ->where('eq.exam_id', $src->id)
+            ->where(function ($w) {
+                $w->whereNull('eq.selected')->orWhereColumn('eq.selected', '!=', 'q.answer');
+            })
+            ->orderBy('eq.position')
+            ->get(['q.id', 's.name as subject']);
+
+        if ($rows->isEmpty()) {
+            return response()->json(['error' => 'You got every question right. Nothing to retake!'], 400);
+        }
+
+        $mode = $request->input('mode') === 'exam' ? 'exam' : 'study';
+        $minutes = $mode === 'study' ? 360 : max(5, min(120, $rows->count()));
+        $names = $rows->pluck('subject')->unique()->values()->all();
+        $ids = $rows->pluck('id')->all();
+
+        $examId = DB::transaction(function () use ($request, $names, $ids, $mode, $minutes) {
+            $id = DB::table('exams')->insertGetId([
+                'user_id' => $request->user()->id,
+                'subjects' => json_encode($names),
+                'started_at' => $this->nowMs(),
+                'duration_sec' => $minutes * 60,
+                'total' => count($ids),
+                'mode' => $mode,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+            foreach ($ids as $i => $qid) {
                 DB::table('exam_questions')->insert(['exam_id' => $id, 'question_id' => $qid, 'position' => $i]);
             }
             return $id;
@@ -112,6 +169,9 @@ class ExamController extends Controller
                 'score' => $e->score,
                 'total' => (int) $e->total,
                 'submitted' => $e->submitted_at !== null,
+                'mode' => $e->mode ?? 'exam',
+                'remainingSec' => max(0, (int) floor(((int) $e->started_at + (int) $e->duration_sec * 1000 - $this->nowMs()) / 1000)),
+                'ageSec' => max(0, (int) floor(($this->nowMs() - (int) $e->started_at) / 1000)),
             ]);
 
         return response()->json($rows->values());
@@ -147,6 +207,25 @@ class ExamController extends Controller
         $row->update(['selected' => $selected === null ? null : (int) $selected]);
 
         return response()->json(['ok' => true]);
+    }
+
+    // Study mode only: after the student answers a question, show the right answer and explanation.
+    public function reveal(Request $request, $id): JsonResponse
+    {
+        $exam = $this->find($request, $id);
+        if (!$exam) return $this->notFound();
+        if (($exam->mode ?? 'exam') !== 'study') {
+            return response()->json(['error' => 'Answers are only revealed in study mode'], 403);
+        }
+
+        $qid = (int) $request->input('questionId');
+        $row = DB::table('exam_questions')->where('exam_id', $exam->id)->where('question_id', $qid)->first();
+        if (!$row) return response()->json(['error' => 'Question not in this exam'], 404);
+        if ($row->selected === null) return response()->json(['error' => 'Answer the question first'], 409);
+
+        $q = DB::table('questions')->where('id', $qid)->first(['answer', 'explanation']);
+
+        return response()->json(['answer' => (int) $q->answer, 'explanation' => $q->explanation]);
     }
 
     public function submit(Request $request, $id): JsonResponse

@@ -25,6 +25,6 @@ class User extends Authenticatable
 
     public function toPublic(): array
     {
-        return ['id' => $this->id, 'name' => $this->name, 'email' => $this->email, 'role' => $this->role];
+        return ['id' => $this->id, 'name' => $this->name, 'email' => $this->email, 'role' => $this->role, 'emailVerified' => $this->email_verified_at !== null];
     }
 }
