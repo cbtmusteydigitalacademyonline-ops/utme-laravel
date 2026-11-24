@@ -56,3 +56,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/auth/verify', [App\Http\Controllers\AuthCodeController::class, 'verify']);
     Route::get('/leaderboard', [App\Http\Controllers\StatsController::class, 'leaderboard']);
 });
+
+Route::post('/paystack/webhook', [App\Http\Controllers\PaymentController::class, 'webhook']);
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/billing/status', [App\Http\Controllers\PaymentController::class, 'status']);
+    Route::post('/payments/initialize', [App\Http\Controllers\PaymentController::class, 'initialize'])->middleware('throttle:10,1');
+    Route::post('/payments/verify', [App\Http\Controllers\PaymentController::class, 'verify'])->middleware('throttle:20,1');
+    Route::get('/admin/payments', [App\Http\Controllers\PaymentController::class, 'adminIndex']);
+});

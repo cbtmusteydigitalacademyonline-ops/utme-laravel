@@ -19,12 +19,13 @@ class User extends Authenticatable
     {
         return [
             'email_verified_at' => 'datetime',
+            'premium_until' => 'datetime',
             'password' => 'hashed',
         ];
     }
 
     public function toPublic(): array
     {
-        return ['id' => $this->id, 'name' => $this->name, 'email' => $this->email, 'role' => $this->role, 'emailVerified' => $this->email_verified_at !== null];
+        return ['id' => $this->id, 'name' => $this->name, 'email' => $this->email, 'role' => $this->role, 'emailVerified' => $this->email_verified_at !== null, 'premium' => \App\Services\BillingService::isPremium($this), 'premiumUntil' => $this->premium_until?->toIso8601String()];
     }
 }

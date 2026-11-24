@@ -2,12 +2,34 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\BillingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class ExamController extends Controller
 {
+    // Free students get a few exams a day, and the full mock is Premium only.
+    private function gate(Request $request): ?JsonResponse
+    {
+        $user = $request->user();
+        if (BillingService::isPremium($user)) return null;
+
+        if (!empty($request->input('counts'))) {
+            return response()->json(['error' => 'The full mock exam is for Premium students. Open the Premium tab to upgrade.', 'code' => 'premium'], 402);
+        }
+
+        $limit = (int) config('billing.free_daily_limit', 2);
+        if (BillingService::usedToday($user) >= $limit) {
+            return response()->json([
+                'error' => "You have used your {$limit} free exams for today. Come back tomorrow, or open the Premium tab for unlimited practice.",
+                'code' => 'limit',
+            ], 402);
+        }
+
+        return null;
+    }
+
     private function nowMs(): int
     {
         return (int) round(microtime(true) * 1000);
@@ -63,6 +85,8 @@ class ExamController extends Controller
     // body: { subjects: ["Mathematics"], perSubject: 10, minutes: 15 }
     public function store(Request $request): JsonResponse
     {
+        if ($block = $this->gate($request)) return $block;
+
         if ((int) $request->input('retakeFrom') > 0) {
             return $this->retake($request, (int) $request->input('retakeFrom'));
         }
