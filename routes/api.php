@@ -67,3 +67,5 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 
 Route::get('/config', [App\Http\Controllers\ConfigController::class, 'show']);
+
+Route::post('/auth/google', [App\Http\Controllers\GoogleAuthController::class, 'login']);

@@ -12,6 +12,8 @@ class ConfigController extends Controller
         return response()->json([
             // only offered when the server can also check the answer
             'turnstileSiteKey' => config('security.turnstile_secret') ? config('security.turnstile_site_key') : null,
+            // public Google sign-in Client ID
+            'googleClientId' => config('google.client_id') ?: null,
         ]);
     }
 }
