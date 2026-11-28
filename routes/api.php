@@ -65,3 +65,5 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/payments/verify', [App\Http\Controllers\PaymentController::class, 'verify'])->middleware('throttle:20,1');
     Route::get('/admin/payments', [App\Http\Controllers\PaymentController::class, 'adminIndex']);
 });
+
+Route::get('/config', [App\Http\Controllers\ConfigController::class, 'show']);

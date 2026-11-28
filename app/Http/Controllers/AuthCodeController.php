@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Services\SignupGuard;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -57,6 +58,13 @@ class AuthCodeController extends Controller
     // POST /api/auth/forgot  { email }. Always answers ok, so nobody can probe which emails exist.
     public function forgot(Request $request): JsonResponse
     {
+        if ($msg = SignupGuard::throttle('forgot:' . $request->ip(), 10, 3600)) {
+            return response()->json(['error' => $msg], 429);
+        }
+        if ($msg = SignupGuard::check($request, false)) {
+            return response()->json(['error' => $msg], 422);
+        }
+
         $email = strtolower(trim((string) $request->input('email')));
         if (User::where('email', $email)->exists()) {
             $this->send($email, 'Your password reset code', 'Use this code to reset your UTME CBT password.', $this->issue($email, 'reset'));
